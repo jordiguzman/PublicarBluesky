@@ -1,14 +1,12 @@
 package mentat.music.com.publicarbluesky.data.bluesky.utils
 
 import android.util.Log
-import androidx.compose.ui.graphics.vector.group
 import mentat.music.com.publicarbluesky.data.bluesky.model.Facet
 import mentat.music.com.publicarbluesky.data.bluesky.model.FacetIndex
 import mentat.music.com.publicarbluesky.data.bluesky.model.FacetLinkFeature
 import mentat.music.com.publicarbluesky.data.bluesky.model.FacetTagFeature
 import java.nio.charset.StandardCharsets
 import java.util.regex.Pattern
-import kotlin.text.toByteArray
 
 /**
  * Crea un Facet para una URL dentro de un texto, usando las clases de BlueskyRichtextFacets.

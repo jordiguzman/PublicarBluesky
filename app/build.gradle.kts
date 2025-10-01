@@ -78,4 +78,10 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:3.0.0")
 
     implementation("org.jsoup:jsoup:1.21.2")
+
+    implementation("androidx.work:work-runtime-ktx:2.10.5") // O la última versión estable
+
+    implementation("com.squareup.okhttp3:okhttp:5.1.0") // O la versión que estés usando de okhttp
+    implementation("com.squareup.okhttp3:logging-interceptor:5.1.0") // <--- ESTA ES LA IMPORTANTE para HttpLoggingInterceptor
+
 }

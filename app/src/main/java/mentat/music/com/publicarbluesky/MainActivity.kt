@@ -19,6 +19,7 @@ import mentat.music.com.publicarbluesky.data.bluesky.remote.api.BlueskyApi
 import mentat.music.com.publicarbluesky.data.bluesky.remote.client.BlueskyClient
 import mentat.music.com.publicarbluesky.data.bluesky.utils.createLinkFacet
 import mentat.music.com.publicarbluesky.data.bluesky.utils.createTagFacets
+import mentat.music.com.publicarbluesky.domain.repository.PublishedImageIdRepository
 import mentat.music.com.publicarbluesky.domain.usecase.GetFreshHubbleImageUseCase
 import mentat.music.com.publicarbluesky.domain.usecase.InMemorySessionManager
 import mentat.music.com.publicarbluesky.domain.usecase.PostToBlueskyUseCase
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var okHttpClient: OkHttpClient
     private lateinit var blueskyApi: BlueskyApi
     private lateinit var sessionManager: SessionManager // <--- AÑADIR DECLARACIÓN
+    private lateinit var publishedImageIdRepository: PublishedImageIdRepository
 
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -44,6 +46,8 @@ class MainActivity : ComponentActivity() {
         // 1. Inicializar dependencias de red
         okHttpClient = OkHttpClient()
         blueskyApi = BlueskyClient.api
+        publishedImageIdRepository =
+            PublishedImageIdRepository(applicationContext) // <--- NUEVA INICIALIZACIÓN
 
         // 1.1. Inicializar SessionManager
         // Asegúrate de que InMemorySessionManager está accesible aquí (misma clase o importado)
@@ -60,7 +64,9 @@ class MainActivity : ComponentActivity() {
         // 2. Inicializar UseCases
         getFreshHubbleImageUseCase = GetFreshHubbleImageUseCase(
             context = applicationContext,
-            okHttpClient = okHttpClient
+            okHttpClient = okHttpClient,
+            publishedImageIdRepository = publishedImageIdRepository,
+            maxScrapingAttempts = 10 // Puedes ajustar este valor según tus necesidades
             // Nota: GetFreshHubbleImageUseCase no parece necesitar SessionManager,
             // ya que obtiene imágenes de una API pública. Si sí lo necesita, añádelo.
         )
