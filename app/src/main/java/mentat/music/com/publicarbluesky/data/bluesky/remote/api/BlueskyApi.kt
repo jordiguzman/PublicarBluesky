@@ -28,11 +28,18 @@ interface BlueskyApi {
         @Body input: CreateRecordInput
     ): Response<CreateRecordOutput>
 
-    @Headers("Content-Type: image/jpeg") // O el que uses
+
     @POST("com.atproto.repo.uploadBlob")
     suspend fun uploadBlob(
         @Header("Authorization") authorization: String,
+        @Header("Content-Type") contentType: String, // <--- AÑADIR ESTE PARÁMETRO
         @Body imageBytes: RequestBody
     ): Response<UploadBlobOutput>
+
+    @POST("com.atproto.server.refreshSession")
+    suspend fun refreshSession(
+        @Header("Authorization") authorization: String // Se envía el Bearer refreshJwt
+    ): Response<CreateSessionOutput> // O CreateSessionOutput si la estructura es idéntica
+    // --- FIN DE LA SECCIÓN A AÑADIR ---
 }
 

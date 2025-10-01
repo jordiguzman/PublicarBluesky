@@ -1,87 +1,74 @@
 package mentat.music.com.publicarbluesky.domain.usecase
 
 import android.util.Log
-import androidx.compose.ui.input.key.type
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import mentat.music.com.publicarbluesky.constans.Constants // Asegúrate que esta importación sea correcta
 import mentat.music.com.publicarbluesky.data.bluesky.model.BlobObject
-import mentat.music.com.publicarbluesky.data.bluesky.model.CreateSessionInput
+import mentat.music.com.publicarbluesky.data.bluesky.model.UploadBlobOutput
 import mentat.music.com.publicarbluesky.data.bluesky.remote.api.BlueskyApi
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.asRequestBody
+import retrofit2.Response
 import java.io.File
 
-private const val TAG = "UploadImageUseCase"
-
+// Ya no necesitas CreateSessionInput ni CreateSessionOutput aquí si SessionManager lo maneja
 class UploadImageToBlueskyUseCase(
-    private val blueskyApi: BlueskyApi
-    // Ya no necesitamos sessionManager aquí, pasaremos identifier y password directamente
-    // o los obtendremos de Constants como en PostToBlueskyUseCase
+    private val blueskyApi: BlueskyApi,
+    private val sessionManager: SessionManager // <--- AÑADIDO SessionManager AL CONSTRUCTOR
 ) {
-
     suspend operator fun invoke(
         imageFile: File,
-        mimeType: String,
-        identifier: String, // Para el login
-        appPassword: String    // Para el login
-    ): Result<BlobObject> = withContext(Dispatchers.IO) {
-        Log.d(TAG, "Iniciando subida de imagen: ${imageFile.name}, MimeType: $mimeType para usuario: $identifier")
+        mimeType: String
+        // Ya NO se necesitan identifier ni appPassword aquí
+    ): Result<BlobObject> {
+        return try {
+            // 1. Obtener sesión válida (y por ende el token) del SessionManager
+            val session = sessionManager.getValidSession()
+                ?: return Result.failure(Exception("No se pudo obtener una sesión válida para subir la imagen."))
 
-        // 1. Crear una nueva sesión para obtener el token de acceso JWT
-        val authorizationHeader: String
-        val sessionInput = CreateSessionInput(identifier, appPassword)
-        try {
-            Log.d(TAG, "Creando sesión para subir imagen...")
-            val sessionResponse = blueskyApi.createSession(sessionInput)
-            if (!sessionResponse.isSuccessful || sessionResponse.body() == null) {
-                val errorBody = sessionResponse.errorBody()?.string() ?: "Sin cuerpo de error"
-                val errorMsg = "Error al crear sesión para subir imagen: ${sessionResponse.code()} ${sessionResponse.message()}. ErrorBody: $errorBody"
-                Log.e(TAG, errorMsg)
-                return@withContext Result.failure(Exception(errorMsg))
-            }
+            val accessToken = session.accessJwt // Obtenemos el token de la sesión válida
 
-            val accessToken = sessionResponse.body()!!.accessJwt
-            if (accessToken.isBlank()) {
-                val errorMsg = "Token de acceso JWT vacío después de crear sesión."
-                Log.e(TAG, errorMsg)
-                return@withContext Result.failure(Exception(errorMsg))
-            }
-            authorizationHeader = "Bearer $accessToken"
-            Log.i(TAG, "Sesión creada y token de acceso obtenido para subir blob.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Excepción al crear sesión para subir imagen: ${e.message}", e)
-            return@withContext Result.failure(e)
-        }
+            Log.d(
+                "UploadImageUseCase",
+                "Token obtenido para subir imagen. Procediendo con la subida..."
+            )
 
-        // 2. Crear el RequestBody para la imagen
-        val mediaType = mimeType.toMediaTypeOrNull()
-        if (mediaType == null) {
-            val errorMsg = "MimeType inválido: $mimeType"
-            Log.e(TAG, errorMsg)
-            return@withContext Result.failure(IllegalArgumentException(errorMsg))
-        }
-        val requestFile = imageFile.asRequestBody(mediaType)
-        Log.d(TAG, "RequestBody creado para ${imageFile.name}. Tamaño: ${imageFile.length()} bytes.")
+            // 2. Preparar RequestBody
+            val requestFile = imageFile.asRequestBody(mimeType.toMediaTypeOrNull())
 
-        // 3. Llamar a la API para subir el blob
-        try {
-            Log.d(TAG, "Llamando a blueskyApi.uploadBlob con token: ${authorizationHeader.substring(0, 15)}...") // No loguear el token completo
-            val response = blueskyApi.uploadBlob(authorizationHeader, requestFile)
+            // 3. Hacer la llamada a uploadBlob
+            // Asegúrate de que tu interfaz BlueskyApi.uploadBlob espera estos parámetros
+            val responseWrapper: Response<UploadBlobOutput> = blueskyApi.uploadBlob(
+                authorization = "Bearer $accessToken",
+                contentType = mimeType, // Si tu API espera este header
+                imageBytes = requestFile
+            )
 
-            if (response.isSuccessful && response.body() != null) {
-                val blobObject = response.body()!!.blob
-                Log.i(TAG, "Imagen subida exitosamente. CID: ${blobObject.ref.cid}, Tipo: ${blobObject.type}, MimeType: ${blobObject.mimeType}, Tamaño: ${blobObject.size}")
-                Result.success(blobObject)
+            if (responseWrapper.isSuccessful) {
+                val uploadBlobOutput = responseWrapper.body()
+                if (uploadBlobOutput != null && uploadBlobOutput.blob != null) { // Verificar también que .blob no sea nulo
+                    Log.i(
+                        "UploadImageUseCase",
+                        "Imagen subida exitosamente. CID: ${uploadBlobOutput.blob.ref.cid}"
+                    )
+                    Result.success(uploadBlobOutput.blob)
+                } else {
+                    Log.w(
+                        "UploadImageUseCase",
+                        "Respuesta exitosa de uploadBlob pero cuerpo o blob interno vacío."
+                    )
+                    Result.failure(Exception("Respuesta exitosa de uploadBlob pero cuerpo o blob interno vacío."))
+                }
             } else {
-                val errorBody = response.errorBody()?.string() ?: "Sin cuerpo de error"
-                val errorMsg = "Error al subir la imagen. Código: ${response.code()}. Mensaje: ${response.message()}. ErrorBody: $errorBody"
-                Log.e(TAG, errorMsg)
-                Result.failure(Exception(errorMsg))
+                val errorBody =
+                    responseWrapper.errorBody()?.string() ?: "Sin cuerpo de error detallado"
+                Log.e(
+                    "UploadImageUseCase",
+                    "Error de API al subir imagen: ${responseWrapper.code()} - $errorBody"
+                )
+                Result.failure(Exception("Error de API (${responseWrapper.code()}) al subir imagen: $errorBody"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Excepción durante la subida de la imagen: ${e.message}", e)
-            Result.failure(e)
+            Log.e("UploadImageUseCase", "Excepción al subir imagen: ${e.message}", e)
+            Result.failure(Exception("Excepción al subir imagen: ${e.localizedMessage}", e))
         }
     }
 }

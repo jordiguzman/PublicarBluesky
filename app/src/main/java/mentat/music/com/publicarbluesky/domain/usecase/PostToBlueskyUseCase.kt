@@ -1,142 +1,227 @@
 package mentat.music.com.publicarbluesky.domain.usecase
 
-import android.os.Build
 import android.util.Log
-import androidx.annotation.RequiresApi
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import mentat.music.com.publicarbluesky.data.bluesky.model.BlobObject
 import mentat.music.com.publicarbluesky.data.bluesky.model.CreateRecordInput
+import mentat.music.com.publicarbluesky.data.bluesky.model.CreateRecordOutput
 import mentat.music.com.publicarbluesky.data.bluesky.model.CreateSessionInput
+import mentat.music.com.publicarbluesky.data.bluesky.model.CreateSessionOutput
 import mentat.music.com.publicarbluesky.data.bluesky.model.EmbedData
+import mentat.music.com.publicarbluesky.data.bluesky.model.Facet
 import mentat.music.com.publicarbluesky.data.bluesky.model.ImageEmbedData
 import mentat.music.com.publicarbluesky.data.bluesky.model.PostRecordData
 import mentat.music.com.publicarbluesky.data.bluesky.remote.api.BlueskyApi
-import java.time.Instant
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
-
-private const val TAG_POST_UC = "PostToBlueskyUseCase"
+import retrofit2.Response
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 class PostToBlueskyUseCase(
-    private val blueskyApi: BlueskyApi
+    private val blueskyApi: BlueskyApi,
+    private val sessionManager: SessionManager // Asumiendo que tienes un SessionManager
 ) {
 
-    @RequiresApi(Build.VERSION_CODES.O)
     suspend operator fun invoke(
-        identifier: String,
-        appPassword: String,
         text: String,
-        imageBlob: BlobObject? = null, // <--- NUEVO: BlobObject opcional para la imagen
-        imageAltText: String? = null   // <--- NUEVO: Texto alternativo opcional para la imagen
-    ): Result<String> = withContext(Dispatchers.IO) {
-        try {
-            // Validar que si hay imagen, haya texto alternativo
-            if (imageBlob != null && imageAltText.isNullOrBlank()) {
-                Log.e(TAG_POST_UC, "Se proporcionó una imagen pero no un texto alternativo.")
-                return@withContext Result.failure(Exception("⚠️ Imagen sin texto alternativo."))
-            }
+        imageBlob: BlobObject? = null,
+        imageAltText: String? = null,
+        facets: List<Facet>? = null,
+        langs: List<String> = listOf("es")
+    ): Result<String> {
+        return try {
+            val session = sessionManager.getValidSession()
+                ?: return Result.failure(Exception("No se pudo obtener una sesión válida de Bluesky."))
 
-            // 1️⃣ Crear Sesión (Login)
-            Log.d(TAG_POST_UC, "Intentando crear sesión para usuario: $identifier")
-            val sessionInput = CreateSessionInput(identifier = identifier, password = appPassword)
-            val sessionResponseWrapper = blueskyApi.createSession(sessionInput)
-
-            if (!sessionResponseWrapper.isSuccessful || sessionResponseWrapper.body() == null) {
-                val errorBody = sessionResponseWrapper.errorBody()?.string()
-                    ?: "Respuesta de sesión nula o fallida"
-                Log.e(
-                    TAG_POST_UC,
-                    "Creación de sesión fallida: ${sessionResponseWrapper.code()} - $errorBody"
-                )
-                return@withContext Result.failure(Exception("❌ Creación de sesión fallida: ${sessionResponseWrapper.code()} - $errorBody"))
-            }
-
-            val sessionData = sessionResponseWrapper.body()!!
-            if (sessionData.accessJwt.isBlank() || sessionData.did.isBlank()) {
-                Log.e(
-                    TAG_POST_UC,
-                    "Creación de sesión fallida: JWT o DID faltante en la respuesta."
-                )
-                return@withContext Result.failure(Exception("❌ Creación de sesión fallida: JWT o DID faltante."))
-            }
-
-            val token = "Bearer ${sessionData.accessJwt}"
-            val userDid = sessionData.did
-            Log.i(
-                TAG_POST_UC,
-                "Sesión creada exitosamente. DID: $userDid. Token: ${token.take(15)}..."
-            )
-
-            // 2️⃣ Preparar el Embed de la imagen (si existe)
-            val embed: EmbedData? = imageBlob?.let { blob ->
-                imageAltText?.let { altText ->
-                    Log.d(
-                        TAG_POST_UC,
-                        "Preparando embed para imagen. CID: ${blob.ref.cid}, Alt: '$altText'"
-                    )
+            val embed = imageBlob?.let { blob ->
+                imageAltText?.let { alt ->
                     EmbedData(
-                        // type = "app.bsky.embed.images" // Ya está por defecto en EmbedData
+                        type = "app.bsky.embed.images",
                         images = listOf(
                             ImageEmbedData(
-                                image = blob, // El BlobObject completo devuelto por uploadBlob
-                                alt = altText
+                                image = blob,
+                                alt = alt.take(1000)
                             )
                         )
                     )
                 }
             }
 
-            // 3️⃣ Crear el contenido del post (el 'record')
-            // Formateador para ISO 8601 con milisegundos y 'Z' para UTC
-            val isoFormatter = DateTimeFormatter.ISO_INSTANT
-            val createdAtIso = Instant.now().atZone(ZoneOffset.UTC).format(isoFormatter)
-            Log.d(TAG_POST_UC, "Generado createdAt: $createdAtIso")
-
-
-            val postRecordContent = PostRecordData(
-                // type = "app.bsky.feed.post" // Ya está por defecto en PostRecordData
+            val record = PostRecordData(
+                type = "app.bsky.feed.post",
                 text = text,
-                createdAt = createdAtIso,
-                langs = listOf("es"), // Opcional, o configurable
-                embed = embed // <--- AÑADIR EL EMBED CREADO
-            )
-            Log.d(TAG_POST_UC, "Contenido de PostRecordData creado: $postRecordContent")
-
-            // 4️⃣ Crear la petición para el nuevo registro
-            val createRecordPayload = CreateRecordInput(
-                repo = userDid,
-                // collection = "app.bsky.feed.post" // Ya está por defecto en CreateRecordInput
-                record = postRecordContent
-            )
-            Log.d(
-                TAG_POST_UC,
-                "Payload completo de CreateRecordInput a enviar: $createRecordPayload"
+                createdAt = getCurrentTimestampISO8601(),
+                langs = langs.ifEmpty { null },
+                embed = embed,
+                facets = facets
             )
 
+            val createRecordInput = CreateRecordInput(
+                repo = session.did,
+                collection = "app.bsky.feed.post",
+                record = record
+            )
 
-            // 5️⃣ Publicar el registro
-            Log.d(TAG_POST_UC, "Intentando crear el registro (post)...")
-            val createRecordResponseWrapper = blueskyApi.createRecord(token, createRecordPayload)
+            // Log.d("PostToBlueskyUseCase", "CreateRecordInput: ${Gson().toJson(createRecordInput)}") // Necesitarías Gson aquí
 
-            if (createRecordResponseWrapper.isSuccessful && createRecordResponseWrapper.body() != null) {
-                val recordUri = createRecordResponseWrapper.body()!!.uri
-                val postType = if (imageBlob != null) "post con imagen" else "post de texto"
-                Log.i(TAG_POST_UC, "Publicado ($postType): $recordUri")
-                Result.success("✅ Publicado ($postType): $recordUri")
+            // Aquí es donde usamos responseWrapper y manejamos Response<CreateRecordOutput>
+            val responseWrapper: Response<CreateRecordOutput> = blueskyApi.createRecord(
+                authorization = "Bearer ${session.accessJwt}",
+                input = createRecordInput
+            )
+
+            if (responseWrapper.isSuccessful) {
+                val createRecordOutput = responseWrapper.body() // Esto es CreateRecordOutput?
+                if (createRecordOutput != null) {
+                    Result.success(createRecordOutput.uri) // Accedemos a .uri desde createRecordOutput
+                } else {
+                    Log.w(
+                        "PostToBlueskyUseCase",
+                        "Respuesta exitosa de createRecord pero cuerpo vacío."
+                    )
+                    Result.failure(Exception("Respuesta exitosa de createRecord pero cuerpo vacío."))
+                }
             } else {
-                val errorBody = createRecordResponseWrapper.errorBody()?.string()
-                    ?: "Respuesta de crear record nula o fallida"
+                val errorBody =
+                    responseWrapper.errorBody()?.string() ?: "Sin cuerpo de error detallado"
                 Log.e(
-                    TAG_POST_UC,
-                    "Error al publicar: ${createRecordResponseWrapper.code()} - $errorBody"
+                    "PostToBlueskyUseCase",
+                    "Error de API al crear post: ${responseWrapper.code()} - $errorBody"
                 )
-                Result.failure(Exception("❌ Error al publicar: ${createRecordResponseWrapper.code()} - $errorBody"))
+                Result.failure(Exception("Error de API (${responseWrapper.code()}) al crear post: $errorBody"))
             }
 
         } catch (e: Exception) {
-            Log.e(TAG_POST_UC, "Error en la operación de post: ${e.message}", e)
-            Result.failure(Exception("⚠️ Error en la operación de post: ${e.message ?: "Error desconocido"}"))
+            Log.e("PostToBlueskyUseCase", "Excepción al crear el post: ${e.message}", e)
+            Result.failure(
+                Exception(
+                    "Excepción al crear el post en Bluesky: ${e.localizedMessage}",
+                    e
+                )
+            )
         }
+    }
+
+    private fun getCurrentTimestampISO8601(): String {
+        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+        sdf.timeZone = TimeZone.getTimeZone("UTC")
+        return sdf.format(Date())
+    }
+}
+
+// Interfaz SessionManager (colócala donde corresponda, quizás en su propio archivo)
+interface SessionManager {
+    suspend fun getValidSession(): CreateSessionOutput?
+    fun clearSession()
+}
+
+// Ejemplo de InMemorySessionManager (colócalo donde corresponda o usa tu implementación)
+class InMemorySessionManager(
+    private val blueskyApi: BlueskyApi
+) : SessionManager {
+    private var currentSession: CreateSessionOutput? = null
+    private var usernameCache: String? = null
+    private var appPasswordCache: String? = null
+
+    fun setCredentials(username: String, appPass: String) {
+        usernameCache = username
+        appPasswordCache = appPass
+        currentSession = null
+    }
+
+    override suspend fun getValidSession(): CreateSessionOutput? {
+        val session = currentSession
+        if (session != null && isTokenValid(session.accessJwt, session.did)) {
+            return session
+        }
+
+        if (session?.refreshJwt != null) {
+            try {
+                // Asumiendo que refreshSession también devuelve Response<RefreshSessionOutput>
+                // y que RefreshSessionOutput tiene los campos necesarios como CreateSessionOutput
+                val refreshResponseWrapper =
+                    blueskyApi.refreshSession("Bearer ${session.refreshJwt}")
+                if (refreshResponseWrapper.isSuccessful) {
+                    val refreshedSessionData = refreshResponseWrapper.body()
+                    if (refreshedSessionData != null) {
+                        // Mapea los campos de RefreshSessionOutput a CreateSessionOutput
+                        // Esto es un ejemplo, ajusta según tu modelo RefreshSessionOutput
+                        currentSession = CreateSessionOutput(
+                            did = refreshedSessionData.did,
+                            handle = refreshedSessionData.handle,
+                            email = refreshedSessionData.email, // Puede no estar en refresh
+                            accessJwt = refreshedSessionData.accessJwt,
+                            refreshJwt = refreshedSessionData.refreshJwt
+                        )
+                        Log.d(
+                            "InMemorySessionManager",
+                            "Sesión refrescada exitosamente para ${currentSession?.handle}"
+                        )
+                        // Aquí deberías guardar la sesión actualizada (ej. en SharedPreferences)
+                        return currentSession
+                    }
+                } else {
+                    Log.w(
+                        "InMemorySessionManager",
+                        "Falló el refresh de sesión: ${refreshResponseWrapper.code()}"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("InMemorySessionManager", "Excepción durante el refresh de sesión", e)
+                currentSession = null
+            }
+        }
+        currentSession = null // Limpiar sesión inválida o si el refresh falló
+
+        val user = usernameCache
+        val pass = appPasswordCache
+        if (user != null && pass != null) {
+            try {
+                // Asumiendo que createSession también devuelve Response<CreateSessionOutput>
+                val createSessionResponseWrapper =
+                    blueskyApi.createSession(CreateSessionInput(user, pass))
+                if (createSessionResponseWrapper.isSuccessful) {
+                    currentSession = createSessionResponseWrapper.body()
+                    if (currentSession != null) {
+                        Log.d(
+                            "InMemorySessionManager",
+                            "Nueva sesión creada para ${currentSession?.handle}"
+                        )
+                        // Aquí deberías guardar la sesión nueva (ej. en SharedPreferences)
+                        return currentSession
+                    }
+                } else {
+                    Log.e(
+                        "InMemorySessionManager",
+                        "Falló la creación de sesión: ${createSessionResponseWrapper.code()}"
+                    )
+                    return null
+                }
+            } catch (e: Exception) {
+                Log.e("InMemorySessionManager", "Excepción al crear sesión", e)
+                return null
+            }
+        }
+        Log.w("InMemorySessionManager", "No hay credenciales para obtener una sesión.")
+        return null
+    }
+
+    override fun clearSession() {
+        currentSession = null
+        usernameCache = null
+        appPasswordCache = null
+        Log.d("InMemorySessionManager", "Sesión borrada.")
+        // Aquí deberías borrar la sesión guardada
+    }
+
+    private fun isTokenValid(jwt: String, didContext: String): Boolean {
+        // IMPLEMENTACIÓN REAL REQUERIDA: Decodifica el JWT y verifica 'exp' y 'aud' (audience, que debe ser el DID).
+        // Por ahora, solo loguea y devuelve true si no está vacío.
+        if (jwt.isBlank()) return false
+        Log.w(
+            "InMemorySessionManager",
+            "isTokenValid para $didContext NO está implementado completamente, asumiendo token como válido si existe."
+        )
+        return true
     }
 }

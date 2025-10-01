@@ -1,8 +1,7 @@
 package mentat.music.com.publicarbluesky.data.bluesky.model
 
 import com.google.gson.annotations.SerializedName
-
-// --- INPUT para com.atproto.repo.createRecord ---
+import mentat.music.com.publicarbluesky.data.bluesky.model.Facet
 
 /**
  * Datos de entrada para el endpoint com.atproto.repo.createRecord.
@@ -20,9 +19,11 @@ data class CreateRecordInput(
 
 /**
  * Representa el contenido del post ("record") que se va a crear.
+ * Esto corresponde a un registro de tipo app.bsky.feed.post.
  */
 data class PostRecordData(
-    @SerializedName("\$type")        val type: String = "app.bsky.feed.post", // Tipo de objeto
+    @SerializedName("\$type")
+    val type: String = "app.bsky.feed.post", // Tipo de objeto
 
     @SerializedName("text")
     val text: String,
@@ -34,11 +35,15 @@ data class PostRecordData(
     val langs: List<String>? = null, // Opcional: Lista de códigos de idioma (ej: ["en", "es"])
 
     @SerializedName("embed")
-    val embed: EmbedData? = null // Opcional: Para adjuntar imágenes, enlaces, etc.
+    val embed: EmbedData? = null, // Opcional: Para adjuntar imágenes, enlaces, etc.
+
+    @SerializedName("facets")
+    val facets: List<Facet>? = null // <--- USA EL FACET IMPORTADO
 )
 
 /**
  * Representa el objeto "embed" para adjuntar contenido.
+ * Actualmente solo soporta imágenes, pero podría extenderse.
  */
 data class EmbedData(
     @SerializedName("\$type")
@@ -53,14 +58,11 @@ data class EmbedData(
  */
 data class ImageEmbedData(
     @SerializedName("image")
-    val image: BlobObject, // REUTILIZA BlobObject. ASEGÚRATE QUE BlobModels.kt Y BlobObject ESTÉN BIEN DEFINIDOS.
+    val image: BlobObject, // Asumo que BlobObject está definido en otro lugar y es importado correctamente.
 
     @SerializedName("alt")
     val alt: String // Texto alternativo para la imagen (IMPORTANTE para accesibilidad)
 )
-
-
-// --- OUTPUT para com.atproto.repo.createRecord ---
 
 /**
  * Datos de salida del endpoint com.atproto.repo.createRecord.
