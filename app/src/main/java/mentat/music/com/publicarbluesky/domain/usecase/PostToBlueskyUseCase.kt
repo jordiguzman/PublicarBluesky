@@ -11,6 +11,7 @@ import mentat.music.com.publicarbluesky.data.bluesky.model.Facet
 import mentat.music.com.publicarbluesky.data.bluesky.model.ImageEmbedData
 import mentat.music.com.publicarbluesky.data.bluesky.model.PostRecordData
 import mentat.music.com.publicarbluesky.data.bluesky.remote.api.BlueskyApi
+import mentat.music.com.publicarbluesky.domain.repository.PublishedImageIdRepository
 import retrofit2.Response
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -19,11 +20,13 @@ import java.util.TimeZone
 
 class PostToBlueskyUseCase(
     private val blueskyApi: BlueskyApi,
-    private val sessionManager: SessionManager // Asumiendo que tienes un SessionManager
+    private val sessionManager: SessionManager,
+    private val publishedImageIdRepository: PublishedImageIdRepository
 ) {
 
     suspend operator fun invoke(
         text: String,
+        imageId: String, // <-- CAMBIO 1: Se añade el ID de la imagen como parámetro requerido.
         imageBlob: BlobObject? = null,
         imageAltText: String? = null,
         facets: List<Facet>? = null,
@@ -62,18 +65,23 @@ class PostToBlueskyUseCase(
                 record = record
             )
 
-            // Log.d("PostToBlueskyUseCase", "CreateRecordInput: ${Gson().toJson(createRecordInput)}") // Necesitarías Gson aquí
-
-            // Aquí es donde usamos responseWrapper y manejamos Response<CreateRecordOutput>
             val responseWrapper: Response<CreateRecordOutput> = blueskyApi.createRecord(
                 authorization = "Bearer ${session.accessJwt}",
                 input = createRecordInput
             )
 
             if (responseWrapper.isSuccessful) {
-                val createRecordOutput = responseWrapper.body() // Esto es CreateRecordOutput?
+                val createRecordOutput = responseWrapper.body()
                 if (createRecordOutput != null) {
-                    Result.success(createRecordOutput.uri) // Accedemos a .uri desde createRecordOutput
+                    // <-- CAMBIO 2: Lógica para guardar el ID de la imagen.
+                    publishedImageIdRepository.addPublishedId(imageId)
+                    Log.i(
+                        "PostToBlueskyUseCase",
+                        "Publicación exitosa. ID '$imageId' guardado en SharedPreferences."
+                    )
+                    // --- Fin del cambio ---
+
+                    Result.success(createRecordOutput.uri)
                 } else {
                     Log.w(
                         "PostToBlueskyUseCase",
@@ -115,7 +123,7 @@ interface SessionManager {
     fun clearSession()
 }
 
-// Ejemplo de InMemorySessionManager (colócalo donde corresponda o usa tu implementación)
+// Implementación completa de InMemorySessionManager
 class InMemorySessionManager(
     private val blueskyApi: BlueskyApi
 ) : SessionManager {
@@ -126,74 +134,83 @@ class InMemorySessionManager(
     fun setCredentials(username: String, appPass: String) {
         usernameCache = username
         appPasswordCache = appPass
-        currentSession = null
+        currentSession =
+            null // Invalida la sesión actual para forzar un nuevo login si es necesario
     }
 
     override suspend fun getValidSession(): CreateSessionOutput? {
         val session = currentSession
+        // Primero, verifica si la sesión actual existe y si su token es (teóricamente) válido
         if (session != null && isTokenValid(session.accessJwt, session.did)) {
+            Log.d("InMemorySessionManager", "Usando sesión en memoria existente.")
             return session
         }
 
+        // Si la sesión no es válida pero tenemos un refresh token, intentamos refrescar
         if (session?.refreshJwt != null) {
             try {
-                // Asumiendo que refreshSession también devuelve Response<RefreshSessionOutput>
-                // y que RefreshSessionOutput tiene los campos necesarios como CreateSessionOutput
+                Log.d("InMemorySessionManager", "Intentando refrescar la sesión...")
                 val refreshResponseWrapper =
                     blueskyApi.refreshSession("Bearer ${session.refreshJwt}")
+
                 if (refreshResponseWrapper.isSuccessful) {
                     val refreshedSessionData = refreshResponseWrapper.body()
                     if (refreshedSessionData != null) {
-                        // Mapea los campos de RefreshSessionOutput a CreateSessionOutput
-                        // Esto es un ejemplo, ajusta según tu modelo RefreshSessionOutput
+                        // Asignamos los nuevos datos de la sesión refrescada
                         currentSession = CreateSessionOutput(
                             did = refreshedSessionData.did,
                             handle = refreshedSessionData.handle,
-                            email = refreshedSessionData.email, // Puede no estar en refresh
+                            email = refreshedSessionData.email, // Puede ser null en la respuesta de refresh
                             accessJwt = refreshedSessionData.accessJwt,
                             refreshJwt = refreshedSessionData.refreshJwt
                         )
-                        Log.d(
+                        Log.i(
                             "InMemorySessionManager",
                             "Sesión refrescada exitosamente para ${currentSession?.handle}"
                         )
-                        // Aquí deberías guardar la sesión actualizada (ej. en SharedPreferences)
+                        // En una app real, guardarías esta nueva sesión en SharedPreferences
                         return currentSession
                     }
                 } else {
                     Log.w(
                         "InMemorySessionManager",
-                        "Falló el refresh de sesión: ${refreshResponseWrapper.code()}"
+                        "Falló el refresh de sesión: ${refreshResponseWrapper.code()} - ${
+                            refreshResponseWrapper.errorBody()?.string()
+                        }"
                     )
                 }
             } catch (e: Exception) {
                 Log.e("InMemorySessionManager", "Excepción durante el refresh de sesión", e)
-                currentSession = null
             }
         }
-        currentSession = null // Limpiar sesión inválida o si el refresh falló
+
+        // Si no hay sesión, no pudimos refrescar, o falló el refresh, intentamos crear una nueva sesión desde cero
+        currentSession = null // Limpiar cualquier resto de sesión inválida
 
         val user = usernameCache
         val pass = appPasswordCache
         if (user != null && pass != null) {
             try {
-                // Asumiendo que createSession también devuelve Response<CreateSessionOutput>
+                Log.d("InMemorySessionManager", "No hay sesión válida, creando una nueva...")
                 val createSessionResponseWrapper =
                     blueskyApi.createSession(CreateSessionInput(user, pass))
+
                 if (createSessionResponseWrapper.isSuccessful) {
                     currentSession = createSessionResponseWrapper.body()
                     if (currentSession != null) {
-                        Log.d(
+                        Log.i(
                             "InMemorySessionManager",
-                            "Nueva sesión creada para ${currentSession?.handle}"
+                            "Nueva sesión creada exitosamente para ${currentSession?.handle}"
                         )
-                        // Aquí deberías guardar la sesión nueva (ej. en SharedPreferences)
+                        // En una app real, guardarías esta nueva sesión en SharedPreferences
                         return currentSession
                     }
                 } else {
                     Log.e(
                         "InMemorySessionManager",
-                        "Falló la creación de sesión: ${createSessionResponseWrapper.code()}"
+                        "Falló la creación de sesión: ${createSessionResponseWrapper.code()} - ${
+                            createSessionResponseWrapper.errorBody()?.string()
+                        }"
                     )
                     return null
                 }
@@ -202,7 +219,8 @@ class InMemorySessionManager(
                 return null
             }
         }
-        Log.w("InMemorySessionManager", "No hay credenciales para obtener una sesión.")
+
+        Log.w("InMemorySessionManager", "No hay sesión ni credenciales en caché para obtener una.")
         return null
     }
 
@@ -210,14 +228,21 @@ class InMemorySessionManager(
         currentSession = null
         usernameCache = null
         appPasswordCache = null
-        Log.d("InMemorySessionManager", "Sesión borrada.")
-        // Aquí deberías borrar la sesión guardada
+        Log.d("InMemorySessionManager", "Sesión y credenciales en memoria borradas.")
+        // En una app real, también borrarías la sesión de SharedPreferences
     }
 
     private fun isTokenValid(jwt: String, didContext: String): Boolean {
-        // IMPLEMENTACIÓN REAL REQUERIDA: Decodifica el JWT y verifica 'exp' y 'aud' (audience, que debe ser el DID).
-        // Por ahora, solo loguea y devuelve true si no está vacío.
+        // --- ADVERTENCIA: IMPLEMENTACIÓN SIMPLIFICADA ---
+        // Una implementación real debería:
+        // 1. Decodificar el JWT (usando una librería como com.auth0.jwt:java-jwt).
+        // 2. Verificar la firma del token (aunque para un cliente es menos crucial que para un servidor).
+        // 3. Verificar la fecha de expiración ('exp'). Si ha pasado, el token no es válido.
+        // 4. Verificar el 'audience' ('aud'), que debería ser el DID del usuario.
         if (jwt.isBlank()) return false
+
+        // Como no estamos decodificando, simplemente asumimos que el token es válido si existe.
+        // Esto NO es seguro para producción, pero funciona para la lógica de la app.
         Log.w(
             "InMemorySessionManager",
             "isTokenValid para $didContext NO está implementado completamente, asumiendo token como válido si existe."
@@ -225,3 +250,4 @@ class InMemorySessionManager(
         return true
     }
 }
+

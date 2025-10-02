@@ -1,6 +1,6 @@
 package mentat.music.com.publicarbluesky.domain.usecase
 
-import ProcessedHubbleImage
+
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -9,6 +9,7 @@ import mentat.music.com.publicarbluesky.constans.Constants
 import mentat.music.com.publicarbluesky.data.hubble.model.HubbleSiteImage
 import mentat.music.com.publicarbluesky.data.hubble.remote.HubbleScraper
 import mentat.music.com.publicarbluesky.data.images.downloadImageToTempFile
+import mentat.music.com.publicarbluesky.domain.model.ProcessedHubbleImage
 import mentat.music.com.publicarbluesky.domain.repository.PublishedImageIdRepository
 import okhttp3.OkHttpClient
 
