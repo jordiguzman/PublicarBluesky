@@ -1,5 +1,6 @@
 package mentat.music.com.publicarbluesky
 
+import PublishedImageIdRepository
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -36,6 +37,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var okHttpClient: OkHttpClient
     private lateinit var blueskyApi: BlueskyApi
     private lateinit var sessionManager: SessionManager // <--- AÑADIR DECLARACIÓN
+    private val publishedImageIdRepository by lazy {
+        PublishedImageIdRepository(applicationContext)
+    }
 
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -117,9 +121,22 @@ class MainActivity : ComponentActivity() {
                         "MainActivity",
                         "Imagen Hubble obtenida: ID ${processedHubbleImage.imageInfo.id}"
                     )
+
+                    // --- INICIO DE LA COMPROBACIÓN ---
+                    if (publishedImageIdRepository.hasBeenPublished(processedHubbleImage.imageInfo.id)) {
+                        val alreadyPublishedMsg =
+                            "Publicación omitida: La imagen de hoy (ID: ${processedHubbleImage.imageInfo.id}) ya ha sido publicada."
+                        Log.d("MainActivity", alreadyPublishedMsg)
+                        Toast.makeText(this@MainActivity, alreadyPublishedMsg, Toast.LENGTH_LONG)
+                            .show()
+                        return@launch // Detiene la ejecución de la función aquí.
+                    }
+                    // --- FIN DE LA COMPROBACIÓN ---
+
+
                     Toast.makeText(
                         this@MainActivity,
-                        "Imagen Hubble lista: ID ${processedHubbleImage.imageInfo.id}. Subiendo...",
+                        "Imagen Hubble nueva: ID ${processedHubbleImage.imageInfo.id}. Subiendo...",
                         Toast.LENGTH_SHORT
                     ).show()
 
@@ -155,24 +172,13 @@ class MainActivity : ComponentActivity() {
                                 constructedPostText += "\n\nFuente: $hubblePageUrl"
                             }
 
-                            // --- AÑADE ALGUNOS HASHTAGS DE EJEMPLO AL TEXTO ---
-                            // Puedes obtenerlos de otro lugar, o añadirlos manualmente para probar
                             constructedPostText += "\n\n#Hubble #esa #nasa"
-                            // --------------------------------------------------
-
-                            // Trunca el texto DESPUÉS de añadir la URL y hashtags.
-                            // Asegúrate de que los hashtags importantes no se corten si están cerca del final.
                             val postTextForBluesky = constructedPostText.take(300)
-
                             val altTextForBluesky =
                                 processedHubbleImage.imageInfo.cleanedTitle?.take(1000)
                                     ?: "Una imagen del espacio profundo capturada por el Hubble."
 
-                            // --- INICIO: Creación de todos los Facets ---
-                            val facets =
-                                mutableListOf<Facet>()
-
-                            // 1. Crear Facets para Enlaces
+                            val facets = mutableListOf<Facet>()
                             if (hubblePageUrl.isNotBlank() && postTextForBluesky.contains(
                                     hubblePageUrl
                                 )
@@ -181,44 +187,26 @@ class MainActivity : ComponentActivity() {
                                     textContent = postTextForBluesky,
                                     linkText = hubblePageUrl,
                                     linkUrl = hubblePageUrl
-                                )?.let { facet ->
-                                    facets.add(facet)
-                                    Log.d(
-                                        "MainActivity",
-                                        "Facet de enlace CREADO para URL: $hubblePageUrl. Facet: $facet"
-                                    )
-                                }
-                            } else if (hubblePageUrl.isNotBlank()) {
-                                Log.w(
-                                    "MainActivity",
-                                    "La URL '$hubblePageUrl' (linkText) no se encontró en el texto final del post '$postTextForBluesky'. NO se creará facet de enlace para ella."
-                                )
+                                )?.let { facets.add(it) }
                             }
-
-                            // 2. Crear Facets para Hashtags
-                            // Usamos la ruta completa a la función por si no tienes la importación directa aún
-                            val tagFacets =
-                                createTagFacets(
-                                    postTextForBluesky
-                                )
+                            val tagFacets = createTagFacets(postTextForBluesky)
                             if (tagFacets.isNotEmpty()) {
                                 facets.addAll(tagFacets)
-                                Log.d(
-                                    "MainActivity",
-                                    "Facets de Tag CREADOS: ${tagFacets.size} tags encontrados."
-                                )
-                            } else {
-                                Log.d(
-                                    "MainActivity",
-                                    "No se encontraron hashtags en '$postTextForBluesky' para crear facets."
-                                )
                             }
-                            // --- FIN DE LA CREACIÓN DE FACETS ---
-
                             Log.d(
                                 "MainActivity",
                                 "Preparando para postear. Texto FINAL: '$postTextForBluesky', Alt text: '$altTextForBluesky', CID: ${blobObject.ref.cid}, Facets: $facets"
                             )
+
+                            // --- GUARDAR ID PUBLICADO ---
+                            // Lo hacemos justo ANTES de llamar a la publicación final.
+                            // Si la app se cierra aquí, en el próximo intento se omitirá, lo cual es seguro.
+                            publishedImageIdRepository.addPublishedId(processedHubbleImage.imageInfo.id)
+                            Log.i(
+                                "MainActivity",
+                                "ID ${processedHubbleImage.imageInfo.id} guardado como publicado."
+                            )
+                            // --- FIN DE GUARDAR ID ---
 
                             callPostToBlueskyWithImage(
                                 text = postTextForBluesky,
@@ -245,6 +233,7 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
+
 
     @RequiresApi(Build.VERSION_CODES.O)
     private fun callPostToBlueskyWithImage(
