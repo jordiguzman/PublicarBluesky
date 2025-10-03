@@ -15,6 +15,7 @@ import kotlinx.coroutines.launch
 import mentat.music.com.publicarbluesky.constans.Constants
 import mentat.music.com.publicarbluesky.data.bluesky.model.BlobObject
 import mentat.music.com.publicarbluesky.data.bluesky.model.Facet
+import mentat.music.com.publicarbluesky.data.bluesky.remote.api.BlueskyApi
 import mentat.music.com.publicarbluesky.data.bluesky.remote.client.BlueskyClient
 import mentat.music.com.publicarbluesky.data.bluesky.utils.createLinkFacet
 import mentat.music.com.publicarbluesky.data.bluesky.utils.createTagFacets
@@ -27,60 +28,70 @@ import mentat.music.com.publicarbluesky.domain.usecase.UploadImageToBlueskyUseCa
 import mentat.music.com.publicarbluesky.ui.features.post.MainScreen
 import okhttp3.OkHttpClient
 
+// Importa tus clases de SessionManager si están en otro paquete
 class MainActivity : ComponentActivity() {
 
-    // Dependencias de la app
     private lateinit var getFreshHubbleImageUseCase: GetFreshHubbleImageUseCase
     private lateinit var postToBlueskyUseCase: PostToBlueskyUseCase
     private lateinit var uploadImageToBlueskyUseCase: UploadImageToBlueskyUseCase
-    private lateinit var sessionManager: SessionManager
+    private lateinit var okHttpClient: OkHttpClient
+    private lateinit var blueskyApi: BlueskyApi
+    private lateinit var sessionManager: SessionManager // <--- AÑADIR DECLARACIÓN
 
-    // Repositorio para evitar repeticiones
-    private val publishedImageIdRepository by lazy {
-        PublishedImageIdRepository(applicationContext)
-    }
+    private lateinit var publishedImageIdRepository: PublishedImageIdRepository
 
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // --- Inicialización de Dependencias ---
-        val okHttpClient = OkHttpClient()
-        val blueskyApi = BlueskyClient.api
+        // 1. Inicializar dependencias de red
+        okHttpClient = OkHttpClient()
+        blueskyApi = BlueskyClient.api
 
-        // Inicializar SessionManager
+        // 1.1. Inicializar SessionManager
+        // Asegúrate de que InMemorySessionManager está accesible aquí (misma clase o importado)
         val inMemorySessionManager = InMemorySessionManager(blueskyApi)
+        // Establecer las credenciales para que el SessionManager pueda crear sesiones
+        // ESTO ES PARA PRUEBAS. En una app real, obtendrías esto de un login seguro.
         inMemorySessionManager.setCredentials(
             Constants.BLUESKY_USERNAME,
             Constants.BLUESKY_APP_PASSWORD
         )
         sessionManager = inMemorySessionManager
 
-        // Inicializar UseCases
+
+        // 2. Inicializar UseCases
         getFreshHubbleImageUseCase = GetFreshHubbleImageUseCase(
             context = applicationContext,
             okHttpClient = okHttpClient,
             publishedImageIdRepository = publishedImageIdRepository
+
         )
 
         postToBlueskyUseCase = PostToBlueskyUseCase(
             blueskyApi = blueskyApi,
-            sessionManager = sessionManager,
-            publishedImageIdRepository = publishedImageIdRepository
+            sessionManager = sessionManager // <--- PASAR sessionManager
         )
 
+        // Asumimos que UploadImageToBlueskyUseCase también necesita SessionManager
+        // para obtener el token de autorización. Si tu UploadImageToBlueskyUseCase
+        // actual no lo tiene, deberás modificarlo para que lo acepte y lo use.
         uploadImageToBlueskyUseCase = UploadImageToBlueskyUseCase(
             blueskyApi = blueskyApi,
-            sessionManager = sessionManager
+            sessionManager = sessionManager // <--- PASAR sessionManager
         )
 
-        // --- Configuración de la UI ---
+        // 3. Configurar la UI con Compose
         setContent {
             Scaffold { innerPadding ->
                 MainScreen(
                     modifier = Modifier.padding(innerPadding),
                     onPostTextClick = { textToPost ->
-                        callPostTextToBlueskyUseCase(text = textToPost)
+                        // Ya no pasamos identifier y appPassword aquí,
+                        // PostToBlueskyUseCase los obtiene del SessionManager
+                        callPostTextToBlueskyUseCase(
+                            text = textToPost
+                        )
                     },
                     onFetchAndProcessHubbleImageClick = {
                         callGetFreshHubbleImageAndUploadToBluesky()
@@ -90,10 +101,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // En MainActivity.kt
+// Asegúrate de tener estas importaciones al principio de tu MainActivity.kt:
+// import mentat.music.com.publicarbluesky.data.bluesky.utils.createLinkFacet
+// import mentat.music.com.publicarbluesky.data.bluesky.utils.createTagFacets
+// import mentat.music.com.publicarbluesky.data.bluesky.model.Facet
     @RequiresApi(Build.VERSION_CODES.O)
     private fun callGetFreshHubbleImageAndUploadToBluesky() {
         lifecycleScope.launch {
             Log.d("MainActivity", "Botón 'Obtener Imagen Hubble' presionado...")
+            // Aquí podrías mostrar un indicador de carga en la UI
 
             val hubbleResult = getFreshHubbleImageUseCase()
 
@@ -103,78 +120,111 @@ class MainActivity : ComponentActivity() {
                         "MainActivity",
                         "Imagen Hubble obtenida: ID ${processedHubbleImage.imageInfo.id}"
                     )
-
-                    // === LÓGICA PARA EVITAR REPETICIONES ===
-                    if (publishedImageIdRepository.hasBeenPublished(processedHubbleImage.imageInfo.id)) {
-                        val alreadyPublishedMsg =
-                            "Publicación omitida: La imagen de hoy (ID: ${processedHubbleImage.imageInfo.id}) ya ha sido publicada."
-                        Log.d("MainActivity", alreadyPublishedMsg)
-                        Toast.makeText(this@MainActivity, alreadyPublishedMsg, Toast.LENGTH_LONG)
-                            .show()
-                        return@launch // Detiene la ejecución.
-                    }
-                    // =========================================
-
                     Toast.makeText(
                         this@MainActivity,
-                        "Imagen Hubble nueva. Subiendo...",
+                        "Imagen Hubble lista: ID ${processedHubbleImage.imageInfo.id}. Subiendo...",
                         Toast.LENGTH_SHORT
                     ).show()
 
+                    val imageFile = processedHubbleImage.imageFile
+                    val mimeType = "image/jpeg" // Asumimos JPEG por ahora
+
                     val uploadResult = uploadImageToBlueskyUseCase(
-                        imageFile = processedHubbleImage.imageFile,
-                        mimeType = "image/jpeg"
+                        imageFile = imageFile,
+                        mimeType = mimeType
                     )
 
                     uploadResult.fold(
                         onSuccess = { blobObject ->
-                            Log.i(
-                                "MainActivity",
+                            val uploadSuccessMsg =
                                 "¡Imagen subida a Bluesky! CID: ${blobObject.ref.cid}"
-                            )
+                            Log.i("MainActivity", uploadSuccessMsg)
                             Toast.makeText(
                                 this@MainActivity,
-                                "Imagen subida. Publicando post...",
+                                "$uploadSuccessMsg. Publicando...",
                                 Toast.LENGTH_SHORT
                             ).show()
 
-                            val imageTitle = processedHubbleImage.imageInfo.cleanedTitle
-                                ?: "Imagen del Telescopio Espacial Hubble"
-                            val hubblePageUrl = processedHubbleImage.imageInfo.fullPageUrl
+                            // --- Construcción del texto del post ---
+                            val imageTitle =
+                                processedHubbleImage.imageInfo.cleanedTitle
+                                    ?: "Imagen del Telescopio Espacial Hubble"
+
+                            val hubblePageUrl =
+                                processedHubbleImage.imageInfo.fullPageUrl
+
                             var constructedPostText = imageTitle
                             if (hubblePageUrl.isNotBlank()) {
                                 constructedPostText += "\n\nFuente: $hubblePageUrl"
                             }
+
+                            // --- AÑADE ALGUNOS HASHTAGS DE EJEMPLO AL TEXTO ---
+                            // Puedes obtenerlos de otro lugar, o añadirlos manualmente para probar
                             constructedPostText += "\n\n#Hubble #esa #nasa"
+                            // --------------------------------------------------
+
+                            // Trunca el texto DESPUÉS de añadir la URL y hashtags.
+                            // Asegúrate de que los hashtags importantes no se corten si están cerca del final.
                             val postTextForBluesky = constructedPostText.take(300)
+
                             val altTextForBluesky =
                                 processedHubbleImage.imageInfo.cleanedTitle?.take(1000)
                                     ?: "Una imagen del espacio profundo capturada por el Hubble."
 
-                            val facets = mutableListOf<Facet>()
+                            // --- INICIO: Creación de todos los Facets ---
+                            val facets =
+                                mutableListOf<Facet>()
+
+                            // 1. Crear Facets para Enlaces
                             if (hubblePageUrl.isNotBlank() && postTextForBluesky.contains(
                                     hubblePageUrl
                                 )
                             ) {
                                 createLinkFacet(
-                                    postTextForBluesky,
-                                    hubblePageUrl,
-                                    hubblePageUrl
-                                )?.let { facets.add(it) }
+                                    textContent = postTextForBluesky,
+                                    linkText = hubblePageUrl,
+                                    linkUrl = hubblePageUrl
+                                )?.let { facet ->
+                                    facets.add(facet)
+                                    Log.d(
+                                        "MainActivity",
+                                        "Facet de enlace CREADO para URL: $hubblePageUrl. Facet: $facet"
+                                    )
+                                }
+                            } else if (hubblePageUrl.isNotBlank()) {
+                                Log.w(
+                                    "MainActivity",
+                                    "La URL '$hubblePageUrl' (linkText) no se encontró en el texto final del post '$postTextForBluesky'. NO se creará facet de enlace para ella."
+                                )
                             }
-                            facets.addAll(createTagFacets(postTextForBluesky))
 
-                            // === GUARDAR ID ANTES DE PUBLICAR ===
-                            publishedImageIdRepository.addPublishedId(processedHubbleImage.imageInfo.id)
-                            Log.i(
+                            // 2. Crear Facets para Hashtags
+                            // Usamos la ruta completa a la función por si no tienes la importación directa aún
+                            val tagFacets =
+                                createTagFacets(
+                                    postTextForBluesky
+                                )
+                            if (tagFacets.isNotEmpty()) {
+                                facets.addAll(tagFacets)
+                                Log.d(
+                                    "MainActivity",
+                                    "Facets de Tag CREADOS: ${tagFacets.size} tags encontrados."
+                                )
+                            } else {
+                                Log.d(
+                                    "MainActivity",
+                                    "No se encontraron hashtags en '$postTextForBluesky' para crear facets."
+                                )
+                            }
+                            // --- FIN DE LA CREACIÓN DE FACETS ---
+
+                            Log.d(
                                 "MainActivity",
-                                "ID ${processedHubbleImage.imageInfo.id} guardado como publicado."
+                                "Preparando para postear. Texto FINAL: '$postTextForBluesky', Alt text: '$altTextForBluesky', CID: ${blobObject.ref.cid}, Facets: $facets"
                             )
-                            // =====================================
 
                             callPostToBlueskyWithImage(
                                 text = postTextForBluesky,
-                                imageId = processedHubbleImage.imageInfo.id,
                                 imageBlob = blobObject,
                                 imageAltText = altTextForBluesky,
                                 facets = facets.ifEmpty { null }
@@ -202,19 +252,23 @@ class MainActivity : ComponentActivity() {
     @RequiresApi(Build.VERSION_CODES.O)
     private fun callPostToBlueskyWithImage(
         text: String,
-        imageId: String,
         imageBlob: BlobObject,
         imageAltText: String,
-        facets: List<Facet>?
+        facets: List<mentat.music.com.publicarbluesky.data.bluesky.model.Facet>? // <--- AÑADIDO EL PARÁMETRO facets
     ) {
         lifecycleScope.launch {
-            val result = postToBlueskyUseCase(
+            Log.d(
+                "MainActivity",
+                "Llamando a PostToBlueskyUseCase (con imagen)... Texto: '$text', Alt: '$imageAltText', Facets: $facets"
+            )
+            // Aquí podrías mostrar un indicador de carga si no está visible
+
+            val result = postToBlueskyUseCase( // Llamada al invoke del UseCase
                 text = text,
-                imageId = imageId, // <-- El parámetro clave que faltaba en la llamada
                 imageBlob = imageBlob,
                 imageAltText = imageAltText,
-                facets = facets,
-                langs = listOf("es")
+                facets = facets, // <--- PASANDO facets AL USE CASE
+                langs = listOf("es") // O el idioma que prefieras por defecto
             )
 
             result.fold(
@@ -228,15 +282,24 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(this@MainActivity, errorMsg, Toast.LENGTH_LONG).show()
                 }
             )
+            // Aquí podrías ocultar el indicador de carga
         }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
-    private fun callPostTextToBlueskyUseCase(text: String) {
+    private fun callPostTextToBlueskyUseCase(
+        // identifier y appPassword ya no son necesarios aquí
+        text: String
+    ) {
         lifecycleScope.launch {
-            val result = postToBlueskyUseCase(
-                text = text
+            Log.d("MainActivity", "Llamando a PostToBlueskyUseCase (solo texto)...")
+            val result = postToBlueskyUseCase( // Llamada al invoke del UseCase
+                text = text,
+                imageBlob = null,
+                imageAltText = null,
+                facets = null // Todavía no estamos construyendo facets
             )
+
             result.fold(
                 onSuccess = { successMessage ->
                     Log.i("MainActivity", "Post de texto exitoso: $successMessage")

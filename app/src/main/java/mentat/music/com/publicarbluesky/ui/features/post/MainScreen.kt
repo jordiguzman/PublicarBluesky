@@ -1,23 +1,32 @@
-package mentat.music.com.publicarbluesky.ui.features.post // O el paquete donde esté tu MainScreen.kt
+package mentat.music.com.publicarbluesky.ui.features.post
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.tooling.preview.Preview // Para el Preview
 
-// Asumiendo que MainScreen está en este paquete o tienes las importaciones correctas
-
-@OptIn(ExperimentalMaterial3Api::class) // Necesario para TextField en M3
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
     modifier: Modifier = Modifier,
-    onPostTextClick: (text: String) -> Unit, // <--- AÑADIDO/MODIFICADO
-    onFetchAndProcessHubbleImageClick: () -> Unit  // <--- AÑADIDO
+    onPostTextClick: (text: String) -> Unit,
+    onFetchAndProcessHubbleImageClick: () -> Unit
 ) {
     var textToPost by remember { mutableStateOf("") }
 
@@ -49,8 +58,7 @@ fun MainScreen(
         Button(
             onClick = {
                 if (textToPost.isNotBlank()) {
-                    onPostTextClick(textToPost) // <--- USA EL NUEVO LAMBDA
-                    // textToPost = "" // Opcional: limpiar el campo después de enviar
+                    onPostTextClick(textToPost)
                 }
             },
             modifier = Modifier
@@ -63,15 +71,12 @@ fun MainScreen(
         // Botón para obtener y procesar imagen del Hubble
         Button(
             onClick = {
-                onFetchAndProcessHubbleImageClick() // <--- USA EL NUEVO LAMBDA
+                onFetchAndProcessHubbleImageClick()
             },
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Obtener y Publicar Imagen del Hubble")
         }
-
-        // Aquí podrías añadir más UI en el futuro para mostrar el estado de la carga de la imagen,
-        // la imagen descargada, etc.
     }
 }
 

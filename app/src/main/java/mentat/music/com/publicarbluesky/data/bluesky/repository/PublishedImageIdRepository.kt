@@ -1,5 +1,6 @@
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 
 /**
  * Gestiona el almacenamiento y la consulta de IDs de imágenes ya publicadas
@@ -31,7 +32,7 @@ class PublishedImageIdRepository(context: Context) {
         currentIds.add(imageId)
 
         // 3. Guardamos la lista actualizada.
-        sharedPreferences.edit().putStringSet(KEY_PUBLISHED_IDS, currentIds).apply()
+        sharedPreferences.edit { putStringSet(KEY_PUBLISHED_IDS, currentIds) }
     }
 
     /**
