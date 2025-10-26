@@ -1,236 +1,92 @@
 package mentat.music.com.publicarbluesky
 
+import android.Manifest // <-- Importante para el permiso
+import android.content.pm.PackageManager // <-- Importante para el permiso
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts // <-- Importante para el permiso
 import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat // <-- Importante para el permiso
 import androidx.lifecycle.lifecycleScope
+import androidx.work.Constraints // <-- Importante para el botón
+import androidx.work.NetworkType // <-- Importante para el botón
+import androidx.work.OneTimeWorkRequest // <-- Importante para el botón
+import androidx.work.WorkManager // <-- Importante para el botón
 import kotlinx.coroutines.launch
-import mentat.music.com.publicarbluesky.constans.Constants
-import mentat.music.com.publicarbluesky.data.bluesky.model.BlobObject
-import mentat.music.com.publicarbluesky.data.bluesky.model.Facet
-import mentat.music.com.publicarbluesky.data.bluesky.remote.client.BlueskyClient
-import mentat.music.com.publicarbluesky.data.bluesky.utils.createLinkFacet
-import mentat.music.com.publicarbluesky.data.bluesky.utils.createTagFacets
-import mentat.music.com.publicarbluesky.domain.repository.PublishedImageIdRepository
-import mentat.music.com.publicarbluesky.domain.usecase.GetFreshHubbleImageUseCase
-import mentat.music.com.publicarbluesky.domain.usecase.InMemorySessionManager
 import mentat.music.com.publicarbluesky.domain.usecase.PostToBlueskyUseCase
-import mentat.music.com.publicarbluesky.domain.usecase.SessionManager
-import mentat.music.com.publicarbluesky.domain.usecase.UploadImageToBlueskyUseCase
 import mentat.music.com.publicarbluesky.ui.features.post.MainScreen
-import okhttp3.OkHttpClient
+// ¡Asegúrate de que este import es correcto!
+import mentat.music.com.publicarbluesky.work.HubblePostWorker
 
 class MainActivity : ComponentActivity() {
 
-    // Dependencias de la app
-    private lateinit var getFreshHubbleImageUseCase: GetFreshHubbleImageUseCase
     private lateinit var postToBlueskyUseCase: PostToBlueskyUseCase
-    private lateinit var uploadImageToBlueskyUseCase: UploadImageToBlueskyUseCase
-    private lateinit var sessionManager: SessionManager
 
-    // Repositorio para evitar repeticiones
-    private val publishedImageIdRepository by lazy {
-        PublishedImageIdRepository(applicationContext)
+    // Lanzador para pedir el permiso de notificación
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            Log.i("MainActivity", "Permiso de notificaciones CONCEDIDO.")
+        } else {
+            Log.w("MainActivity", "Permiso de notificaciones DENEGADO.")
+            Toast.makeText(this, "No se podrán mostrar notificaciones.", Toast.LENGTH_SHORT).show()
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // --- Inicialización de Dependencias ---
-        val okHttpClient = OkHttpClient()
-        val blueskyApi = BlueskyClient.api
+        // Obtener el AppContainer de MyApplication
+        val appContainer = (application as MyApplication).appContainer
+        postToBlueskyUseCase = appContainer.postToBlueskyUseCase
 
-        // Inicializar SessionManager
-        val inMemorySessionManager = InMemorySessionManager(blueskyApi)
-        inMemorySessionManager.setCredentials(
-            Constants.BLUESKY_USERNAME,
-            Constants.BLUESKY_APP_PASSWORD
-        )
-        sessionManager = inMemorySessionManager
+        // Pedir permiso de notificación al arrancar
+        checkAndRequestNotificationPermission()
 
-        // Inicializar UseCases
-        getFreshHubbleImageUseCase = GetFreshHubbleImageUseCase(
-            context = applicationContext,
-            okHttpClient = okHttpClient,
-            publishedImageIdRepository = publishedImageIdRepository
-        )
-
-        postToBlueskyUseCase = PostToBlueskyUseCase(
-            blueskyApi = blueskyApi,
-            sessionManager = sessionManager,
-            publishedImageIdRepository = publishedImageIdRepository
-        )
-
-        uploadImageToBlueskyUseCase = UploadImageToBlueskyUseCase(
-            blueskyApi = blueskyApi,
-            sessionManager = sessionManager
-        )
-
-        // --- Configuración de la UI ---
         setContent {
             Scaffold { innerPadding ->
                 MainScreen(
                     modifier = Modifier.padding(innerPadding),
+
+                    // Este botón de texto se queda igual
                     onPostTextClick = { textToPost ->
                         callPostTextToBlueskyUseCase(text = textToPost)
                     },
+
+                    // --- ¡¡ESTA ES LA LÓGICA NUEVA DEL BOTÓN!! ---
                     onFetchAndProcessHubbleImageClick = {
-                        callGetFreshHubbleImageAndUploadToBluesky()
+                        Log.d("MainActivity", "Botón de publicación manual presionado.")
+                        Toast.makeText(this@MainActivity, "Iniciando publicación manual...", Toast.LENGTH_SHORT).show()
+
+                        // 1. Crear las restricciones
+                        val constraints = Constraints.Builder()
+                            .setRequiredNetworkType(NetworkType.CONNECTED)
+                            .build()
+
+                        // 2. Crear una petición de UNA SOLA VEZ
+                        val manualWorkRequest = OneTimeWorkRequest.Builder(HubblePostWorker::class.java)
+                            .setConstraints(constraints)
+                            .build()
+
+                        // 3. ¡Encolar la tarea para que se ejecute AHORA!
+                        WorkManager.getInstance(this@MainActivity).enqueue(manualWorkRequest)
                     }
+                    // --- FIN DE LA LÓGICA NUEVA ---
                 )
             }
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun callGetFreshHubbleImageAndUploadToBluesky() {
-        lifecycleScope.launch {
-            Log.d("MainActivity", "Botón 'Obtener Imagen Hubble' presionado...")
-
-            val hubbleResult = getFreshHubbleImageUseCase()
-
-            hubbleResult.fold(
-                onSuccess = { processedHubbleImage ->
-                    Log.i(
-                        "MainActivity",
-                        "Imagen Hubble obtenida: ID ${processedHubbleImage.imageInfo.id}"
-                    )
-
-                    // === LÓGICA PARA EVITAR REPETICIONES ===
-                    if (publishedImageIdRepository.hasBeenPublished(processedHubbleImage.imageInfo.id)) {
-                        val alreadyPublishedMsg =
-                            "Publicación omitida: La imagen de hoy (ID: ${processedHubbleImage.imageInfo.id}) ya ha sido publicada."
-                        Log.d("MainActivity", alreadyPublishedMsg)
-                        Toast.makeText(this@MainActivity, alreadyPublishedMsg, Toast.LENGTH_LONG)
-                            .show()
-                        return@launch // Detiene la ejecución.
-                    }
-                    // =========================================
-
-                    Toast.makeText(
-                        this@MainActivity,
-                        "Imagen Hubble nueva. Subiendo...",
-                        Toast.LENGTH_SHORT
-                    ).show()
-
-                    val uploadResult = uploadImageToBlueskyUseCase(
-                        imageFile = processedHubbleImage.imageFile,
-                        mimeType = "image/jpeg"
-                    )
-
-                    uploadResult.fold(
-                        onSuccess = { blobObject ->
-                            Log.i(
-                                "MainActivity",
-                                "¡Imagen subida a Bluesky! CID: ${blobObject.ref.cid}"
-                            )
-                            Toast.makeText(
-                                this@MainActivity,
-                                "Imagen subida. Publicando post...",
-                                Toast.LENGTH_SHORT
-                            ).show()
-
-                            val imageTitle = processedHubbleImage.imageInfo.cleanedTitle
-                                ?: "Imagen del Telescopio Espacial Hubble"
-                            val hubblePageUrl = processedHubbleImage.imageInfo.fullPageUrl
-                            var constructedPostText = imageTitle
-                            if (hubblePageUrl.isNotBlank()) {
-                                constructedPostText += "\n\nFuente: $hubblePageUrl"
-                            }
-                            constructedPostText += "\n\n#Hubble #esa #nasa"
-                            val postTextForBluesky = constructedPostText.take(300)
-                            val altTextForBluesky =
-                                processedHubbleImage.imageInfo.cleanedTitle?.take(1000)
-                                    ?: "Una imagen del espacio profundo capturada por el Hubble."
-
-                            val facets = mutableListOf<Facet>()
-                            if (hubblePageUrl.isNotBlank() && postTextForBluesky.contains(
-                                    hubblePageUrl
-                                )
-                            ) {
-                                createLinkFacet(
-                                    postTextForBluesky,
-                                    hubblePageUrl,
-                                    hubblePageUrl
-                                )?.let { facets.add(it) }
-                            }
-                            facets.addAll(createTagFacets(postTextForBluesky))
-
-                            // === GUARDAR ID ANTES DE PUBLICAR ===
-                            publishedImageIdRepository.addPublishedId(processedHubbleImage.imageInfo.id)
-                            Log.i(
-                                "MainActivity",
-                                "ID ${processedHubbleImage.imageInfo.id} guardado como publicado."
-                            )
-                            // =====================================
-
-                            callPostToBlueskyWithImage(
-                                text = postTextForBluesky,
-                                imageId = processedHubbleImage.imageInfo.id,
-                                imageBlob = blobObject,
-                                imageAltText = altTextForBluesky,
-                                facets = facets.ifEmpty { null }
-                            )
-                        },
-                        onFailure = { uploadException ->
-                            val uploadErrorMsg =
-                                "Error al subir imagen a Bluesky: ${uploadException.message}"
-                            Log.e("MainActivity", uploadErrorMsg, uploadException)
-                            Toast.makeText(this@MainActivity, uploadErrorMsg, Toast.LENGTH_LONG)
-                                .show()
-                        }
-                    )
-                },
-                onFailure = { hubbleException ->
-                    val hubbleErrorMsg =
-                        "Error al obtener imagen del Hubble: ${hubbleException.message}"
-                    Log.e("MainActivity", hubbleErrorMsg, hubbleException)
-                    Toast.makeText(this@MainActivity, hubbleErrorMsg, Toast.LENGTH_LONG).show()
-                }
-            )
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.O)
-    private fun callPostToBlueskyWithImage(
-        text: String,
-        imageId: String,
-        imageBlob: BlobObject,
-        imageAltText: String,
-        facets: List<Facet>?
-    ) {
-        lifecycleScope.launch {
-            val result = postToBlueskyUseCase(
-                text = text,
-                imageId = imageId, // <-- El parámetro clave que faltaba en la llamada
-                imageBlob = imageBlob,
-                imageAltText = imageAltText,
-                facets = facets,
-                langs = listOf("es")
-            )
-
-            result.fold(
-                onSuccess = { successMessage ->
-                    Log.i("MainActivity", "Post con imagen exitoso: $successMessage")
-                    Toast.makeText(this@MainActivity, successMessage, Toast.LENGTH_LONG).show()
-                },
-                onFailure = { exception ->
-                    val errorMsg = "Error al postear con imagen: ${exception.message}"
-                    Log.e("MainActivity", errorMsg, exception)
-                    Toast.makeText(this@MainActivity, errorMsg, Toast.LENGTH_LONG).show()
-                }
-            )
-        }
-    }
-
+    // Función para el botón de "Publicar Texto"
     @RequiresApi(Build.VERSION_CODES.O)
     private fun callPostTextToBlueskyUseCase(text: String) {
         lifecycleScope.launch {
@@ -248,6 +104,28 @@ class MainActivity : ComponentActivity() {
                     Toast.makeText(this@MainActivity, errorMsg, Toast.LENGTH_LONG).show()
                 }
             )
+        }
+    }
+
+    // Nueva función para comprobar y pedir el permiso de notificación
+    private fun checkAndRequestNotificationPermission() {
+        // Solo es necesario en Android 13 (API 33) y superior
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            when {
+                // Comprobar si el permiso YA está concedido
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED -> {
+                    Log.d("MainActivity", "El permiso de notificación ya estaba concedido.")
+                }
+
+                // Pedir el permiso
+                else -> {
+                    Log.d("MainActivity", "Pidiendo permiso de notificación...")
+                    requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
         }
     }
 }

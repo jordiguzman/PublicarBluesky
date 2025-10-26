@@ -1,11 +1,11 @@
 package mentat.music.com.publicarbluesky.work
 
-import mentat.music.com.publicarbluesky.domain.model.ProcessedHubbleImage
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -13,9 +13,15 @@ import mentat.music.com.publicarbluesky.R
 import mentat.music.com.publicarbluesky.domain.usecase.GetFreshHubbleImageUseCase
 import mentat.music.com.publicarbluesky.domain.usecase.PostToBlueskyUseCase
 import mentat.music.com.publicarbluesky.domain.usecase.UploadImageToBlueskyUseCase
-import kotlin.getOrThrow
-import mentat.music.com.publicarbluesky.helpers.createFacets
-
+import mentat.music.com.publicarbluesky.data.bluesky.model.Facet
+import mentat.music.com.publicarbluesky.data.bluesky.utils.createLinkFacet
+import mentat.music.com.publicarbluesky.data.bluesky.utils.createTagFacets
+import java.util.Calendar // <-- Importante para las horas
+import java.util.concurrent.TimeUnit // <-- Importante para el delay
+import androidx.work.Constraints // <-- Importante para re-programar
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequest // <-- Importante para re-programar
+import androidx.work.WorkManager // <-- Importante para re-programar
 
 
 class HubblePostWorker(
@@ -31,115 +37,107 @@ class HubblePostWorker(
         const val NOTIFICATION_CHANNEL_ID = "hubble_post_channel"
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun doWork(): Result {
         Log.i(TAG, "Worker iniciado. Comenzando proceso de publicación automática.")
 
-        return try { // El try-catch envuelve todo y devuelve el resultado final
-            // 1. Obtener imagen fresca del Hubble        Log.d(TAG, "Paso 1: Obteniendo imagen fresca del Hubble...")
-            val imageResult = getFreshHubbleImageUseCase()
+        var runResult: Result // Variable para guardar el resultado de esta ejecución
 
-            // Usamos fold para manejar el éxito y el fracaso de forma segura
-            imageResult.fold(
-                onSuccess = { processedImage: ProcessedHubbleImage ->
-                    // Si llegamos aquí, tenemos una imagen válida. Continuamos con la lógica.
-                    Log.d(TAG, "Imagen obtenida con éxito: ID ${processedImage.imageInfo.id}")
-                    // Llamamos a una nueva función que contiene el resto de los pasos
-                    // PERO NO DEVOLVEMOS SU RESULTADO AQUÍ
-                },
-                onFailure = { error: Throwable ->
-                    // Si el UseCase falló, lanzamos una excepción para que el CATCH la recoja.
-                    throw error
-                }
+        // Un solo try-catch para toda la operación
+        try {
+            // --- 1. OBTENER IMAGEN ---
+            Log.d(TAG, "Paso 1: Obteniendo imagen fresca del Hubble...")
+            val processedImage = getFreshHubbleImageUseCase().getOrThrow()
+            Log.d(TAG, "Imagen obtenida con éxito: ID ${processedImage.imageInfo.id}")
+
+
+            // --- 2. SUBIR IMAGEN ---
+            Log.d(TAG, "Paso 2: Subiendo imagen a Bluesky...")
+            val blobObject = uploadImageToBlueskyUseCase(processedImage.imageFile, "image/jpeg").getOrThrow()
+            Log.d(TAG, "Imagen subida con éxito. CID: ${blobObject.ref.cid}")
+
+
+            // --- 3. PUBLICAR POST ---
+            Log.d(TAG, "Paso 3: Creando y publicando el post...")
+            val imageInfo = processedImage.imageInfo
+            val imageTitle = imageInfo.cleanedTitle ?: "Imagen del Telescopio Espacial Hubble"
+            val hubblePageUrl = imageInfo.fullPageUrl
+            var constructedPostText = imageTitle
+            if (hubblePageUrl.isNotBlank()) {
+                constructedPostText += "\n\nFuente: $hubblePageUrl"
+            }
+            constructedPostText += "\n\n#Hubble #esa #nasa"
+            val postText = constructedPostText.take(300)
+            val altText = imageInfo.cleanedTitle?.take(1000)
+                ?: "Una imagen del espacio profundo capturada por el Hubble."
+
+            val facets = createFacets(postText, hubblePageUrl)
+
+            val postResult = postToBlueskyUseCase(
+                text = postText,
+                imageId = imageInfo.id,
+                imageBlob = blobObject,
+                imageAltText = altText,
+                facets = facets,
+                langs = listOf("es")
+            )
+            postResult.getOrThrow()
+
+
+            // --- 4. ÉXITO Y NOTIFICACIÓN ---
+            Log.i(TAG, "¡Publicación completada con éxito!")
+            showNotification(
+                "Publicación Exitosa",
+                "La imagen del Hubble se ha publicado."
             )
 
-            // Si el fold tuvo éxito, la imagen está en imageResult.getOrThrow()
-            // y podemos continuar con el siguiente paso.
-            val successfulImage = imageResult.getOrThrow()
-            publishImage(successfulImage) // Llamamos a la función que hace el resto y devuelve el Result final
+            // Guardamos que esta ejecución fue un éxito
+            runResult = Result.success()
 
         } catch (e: Exception) {
-            // CUALQUIER error (del getFresh, del publish, etc.) será capturado aquí
+            // CUALQUIER error de los pasos anteriores termina aquí
             Log.e(TAG, "Fallo en doWork: ${e.message}", e)
             showNotification("Fallo en la Publicación", e.message ?: "Ocurrió un error inesperado.")
-            Result.failure() // Devolvemos un fallo general
+
+            // Guardamos que esta ejecución falló
+            runResult = Result.failure()
         }
+
+        // --- 5. ¡¡IMPORTANTE!! RE-PROGRAMAR LA SIGUIENTE TAREA ---
+        // Esto se ejecuta AHORA tanto si runResult es success() como failure().
+        // Así nos aseguramos de que la cadena NUNCA se rompa.
+        Log.d(TAG, "Programando la siguiente tarea...")
+        scheduleNextWork()
+
+        // Devolvemos el resultado de ESTA ejecución
+        return runResult
     }
 
+    // --- FUNCIONES DE LÓGICA DE POST ---
 
-    // --- NUEVA FUNCIÓN EXTRAÍDA PARA CLARIDAD ---
-    private suspend fun publishImage(processedImage: ProcessedHubbleImage): Result {
-        val imageInfo = processedImage.imageInfo
-
-
-
-
-        // 2. Subir la imagen a Bluesky para obtener el Blob
-        Log.d(TAG, "Paso 2: Subiendo imagen a Bluesky...")
-        val uploadResult = uploadImageToBlueskyUseCase(processedImage.imageFile, "image/jpeg")
-
-        val blobObject = uploadResult.getOrNull()
-            ?: run {
-                val errorMsg =
-                    uploadResult.exceptionOrNull()?.message ?: "Error desconocido al subir imagen."
-                Log.e(TAG, "Fallo al subir imagen a Bluesky: $errorMsg")
-                showNotification(
-                    "Fallo en la publicación",
-                    "Error al subir la imagen al servidor de Bluesky."
-                )
-                return Result.failure()
-            }
-        Log.d(TAG, "Imagen subida con éxito. CID: ${blobObject.ref.cid}")
-
-        // 3. Crear el post con el texto, la imagen y los facets
-        Log.d(TAG, "Paso 3: Creando y publicando el post...")
-        val postText = "Imagen del Telescopio Hubble\n\n#Hubble #Espacio #Astronomía"
-        val altText = "Una imagen capturada por el Telescopio Espacial Hubble."
-        val facets = createFacets(postText) // <--- DESCOMENTAR
-
-
-        val postResult = postToBlueskyUseCase(
-            text = postText,
-            imageId = imageInfo.id, // ¡Importante para que se guarde!
-            imageBlob = blobObject,
-            imageAltText = altText,
-            facets = facets,
-            langs = listOf("es")
-        )
-
-        // 4. Comprobar resultado final y enviar notificación
-        return postResult.fold(
-            onSuccess = { uri ->
-                Log.i(TAG, "¡Publicación completada con éxito! URI: $uri")
-                showNotification(
-                    "Publicación Exitosa",
-                    "La imagen del Hubble de hoy se ha publicado."
-                )
-                Result.success()
-            },
-            onFailure = { error ->
-                Log.e(TAG, "Fallo al crear el post en Bluesky: ${error.message}", error)
-                showNotification(
-                    "Fallo en la publicación",
-                    "Error final al publicar el post en Bluesky."
-                )
-                Result.failure()
-            }
-        )
+    // Tu función createFacets (basada en el código de tu antigua MainActivity)
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun createFacets(postText: String, hubblePageUrl: String): List<Facet>? {
+        val facets = mutableListOf<Facet>()
+        if (hubblePageUrl.isNotBlank() && postText.contains(hubblePageUrl)) {
+            createLinkFacet(postText, hubblePageUrl, hubblePageUrl)?.let { facets.add(it) }
+        }
+        facets.addAll(createTagFacets(postText))
+        return facets.ifEmpty { null }
     }
 
+    // Tu función de notificación (se queda igual)
     private fun showNotification(title: String, content: String) {
         val notificationManager =
             appContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // Crear canal de notificación (necesario para Android 8.0+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
                 "Notificaciones de Publicación",
                 NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description =
-                    "Notificaciones sobre el estado de las publicaciones automáticas del Hubble."
+                description = "Notificaciones sobre publicaciones automáticas del Hubble."
             }
             notificationManager.createNotificationChannel(channel)
         }
@@ -153,5 +151,67 @@ class HubblePostWorker(
             .build()
 
         notificationManager.notify(System.currentTimeMillis().toInt(), notification)
+    }
+
+
+    // --- NUEVAS FUNCIONES DE RE-PROGRAMACIÓN ---
+
+    /**
+     * Esta función se llama cuando el worker termina con ÉXITO.
+     * Calcula cuál es la próxima hora (17 o 23) y programa
+     * una nueva tarea (OneTimeWorkRequest) para ese momento.
+     */
+    private fun scheduleNextWork() {
+        val calendar = Calendar.getInstance()
+        val currentHour = calendar.get(Calendar.HOUR_OF_DAY)
+
+        val delay: Long
+
+        if (currentHour < 17) {
+            // Si son menos de las 17h (ej: una prueba a las 14h), programar para las 17h
+            delay = calculateDelay(17)
+        } else if (currentHour < 23) {
+            // Si son más de las 17h pero menos de las 23h (ej: se ejecutó a las 17h),
+            // programar para las 23h (aprox 6 horas de espera)
+            delay = calculateDelay(23)
+        } else {
+            // Si son más de las 23h (ej: se ejecutó a las 23h),
+            // programar para las 17h de MAÑANA (aprox 18 horas de espera)
+            delay = calculateDelay(17)
+        }
+
+        // Crear la próxima petición
+        val nextWorkRequest = OneTimeWorkRequest.Builder(HubblePostWorker::class.java)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setInitialDelay(delay, TimeUnit.MILLISECONDS)
+            .build()
+
+        // Encolar la próxima tarea en la cadena
+        WorkManager.getInstance(appContext).enqueue(nextWorkRequest)
+        Log.i(TAG, "Próxima tarea programada en $delay ms.")
+    }
+
+    /**
+     * Función helper para calcular los milisegundos que faltan
+     * desde AHORA hasta la 'targetHour' (17 o 23).
+     * Si la hora ya pasó hoy, calcula para mañana.
+     */
+    private fun calculateDelay(targetHour: Int): Long {
+        val calendar = Calendar.getInstance()
+        val now = calendar.timeInMillis
+
+        calendar.set(Calendar.HOUR_OF_DAY, targetHour)
+        calendar.set(Calendar.MINUTE, 0)
+        calendar.set(Calendar.SECOND, 0)
+        calendar.set(Calendar.MILLISECOND, 0)
+        var targetTime = calendar.timeInMillis
+
+        if (targetTime <= now) {
+            // Si ya ha pasado la hora objetivo de HOY, sumar 1 día
+            calendar.add(Calendar.DAY_OF_YEAR, 1)
+            targetTime = calendar.timeInMillis
+        }
+
+        return targetTime - now // Devuelve la diferencia en milisegundos
     }
 }

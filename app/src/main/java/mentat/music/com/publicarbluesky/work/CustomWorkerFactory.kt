@@ -1,18 +1,13 @@
 package mentat.music.com.publicarbluesky.work
 
-
 import android.content.Context
 import androidx.work.ListenableWorker
 import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
-import mentat.music.com.publicarbluesky.domain.usecase.GetFreshHubbleImageUseCase
-import mentat.music.com.publicarbluesky.domain.usecase.PostToBlueskyUseCase
-import mentat.music.com.publicarbluesky.domain.usecase.UploadImageToBlueskyUseCase
+import mentat.music.com.publicarbluesky.di.AppContainer // <-- Importante
 
 class CustomWorkerFactory(
-    private val getFreshHubbleImageUseCase: GetFreshHubbleImageUseCase,
-    private val uploadImageToBlueskyUseCase: UploadImageToBlueskyUseCase,
-    private val postToBlueskyUseCase: PostToBlueskyUseCase
+    private val container: AppContainer // <-- Recibe el AppContainer
 ) : WorkerFactory() {
 
     override fun createWorker(
@@ -21,18 +16,25 @@ class CustomWorkerFactory(
         workerParameters: WorkerParameters
     ): ListenableWorker? {
 
+        // Comprueba qué worker le están pidiendo
         return when (workerClassName) {
-            HubblePostWorker::class.java.name ->
+            HubblePostWorker::class.java.name -> {
+                // Si es el HubblePostWorker, lo crea pasándole
+                // las dependencias desde el container
                 HubblePostWorker(
-                    appContext = appContext,
-                    workerParameters = workerParameters,
-                    getFreshHubbleImageUseCase = getFreshHubbleImageUseCase,
-                    uploadImageToBlueskyUseCase = uploadImageToBlueskyUseCase,
-                    postToBlueskyUseCase = postToBlueskyUseCase
+                    appContext,
+                    workerParameters,
+                    container.getFreshHubbleImageUseCase, // <-- Inyección
+                    container.uploadImageToBlueskyUseCase, // <-- Inyección
+                    container.postToBlueskyUseCase         // <-- Inyección
                 )
+            }
+
+            // Aquí podrías añadir más workers si tuvieras
+            // case OtroWorker::class.java.name -> ...
 
             else -> {
-                // Devuelve null para que WorkManager use su fábrica por defecto para otros workers.
+                // No sabe cómo crear este worker
                 null
             }
         }
