@@ -1,6 +1,8 @@
 package mentat.music.com.publicarbluesky.domain.usecase
 
 import android.util.Log
+// --- ¡¡NUEVOS IMPORTS!! (Asegúrate de que tus modelos se llamen así) ---
+// --- FIN DE NUEVOS IMPORTS ---
 import mentat.music.com.publicarbluesky.data.bluesky.model.BlobObject
 import mentat.music.com.publicarbluesky.data.bluesky.model.CreateRecordInput
 import mentat.music.com.publicarbluesky.data.bluesky.model.CreateRecordOutput
@@ -17,6 +19,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import mentat.music.com.publicarbluesky.domain.model.AspectRatio
 
 class PostToBlueskyUseCase(
     private val blueskyApi: BlueskyApi,
@@ -27,6 +30,10 @@ class PostToBlueskyUseCase(
         text: String, imageId: String? = null,
         imageBlob: BlobObject? = null,
         imageAltText: String? = null,
+        // --- ¡¡LÍNEAS NUEVAS!! ---
+        imageWidth: Int? = null,
+        imageHeight: Int? = null,
+        // --- FIN DE LÍNEAS NUEVAS ---
         facets: List<Facet>? = null,
         langs: List<String> = listOf("es")
     ): Result<String> {
@@ -34,19 +41,33 @@ class PostToBlueskyUseCase(
             val session = sessionManager.getValidSession()
                 ?: return Result.failure(Exception("No se pudo obtener una sesión válida de Bluesky."))
 
+            // --- ¡¡BLOQUE MODIFICADO!! ---
             val embed = imageBlob?.let { blob ->
                 imageAltText?.let { alt ->
+
+                    // 1. Crear el objeto AspectRatio si tenemos las dimensiones
+                    val aspectRatio = if (imageWidth != null && imageHeight != null && imageWidth > 0 && imageHeight > 0) {
+                        Log.d("PostToBlueskyUseCase", "Adjuntando AspectRatio: ${imageWidth}x$imageHeight")
+                        AspectRatio(width = imageWidth, height = imageHeight)
+                    } else {
+                        Log.w("PostToBlueskyUseCase", "Dimensiones no proporcionadas, aspectRatio será nulo.")
+                        null
+                    }
+
+                    // 2. Crear el EmbedData con el aspectRatio
                     EmbedData(
                         type = "app.bsky.embed.images",
                         images = listOf(
                             ImageEmbedData(
                                 image = blob,
-                                alt = alt.take(1000)
+                                alt = alt.take(1000),
+                                aspectRatio = aspectRatio // <-- ¡Aquí está la magia!
                             )
                         )
                     )
                 }
             }
+            // --- FIN DEL BLOQUE MODIFICADO ---
 
             val record = PostRecordData(
                 type = "app.bsky.feed.post",
@@ -252,4 +273,3 @@ class InMemorySessionManager(
         return true
     }
 }
-

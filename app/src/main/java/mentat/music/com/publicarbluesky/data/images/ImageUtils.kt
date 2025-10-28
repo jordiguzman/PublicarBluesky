@@ -1,15 +1,15 @@
 package mentat.music.com.publicarbluesky.data.images
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.util.UUID
+
 
 // En ImageUtils.kt
 private const val TAG = "ImageUtils"
@@ -70,6 +70,36 @@ fun downloadImageToTempFile(
         null
     } catch (e: Exception) { // <--- MANEJO DE EXCEPCIÓN (debería loguear)
         Log.e(TAG, "Excepción general durante la descarga de $imageUrl: ${e.message}", e)
+        null
+    }
+}
+// Pega esto en ImageUtils.kt, debajo de la función downloadImageToTempFile
+
+
+
+/**
+ * Lee las dimensiones (ancho y alto) de un archivo de imagen
+ * sin cargar el bitmap completo en memoria.
+ *
+ * @param imageFile El archivo de la imagen.
+ * @return Un Pair<Int, Int> con (ancho, alto), o null si no se puede leer.
+ */
+fun getImageDimensions(imageFile: File): Pair<Int, Int>? {
+    return try {
+        val options = BitmapFactory.Options().apply {
+            // Esta bandera le dice a BitmapFactory que solo lea los "límites"
+            // (dimensiones) del archivo, sin cargar los píxeles.
+            inJustDecodeBounds = true
+        }
+        BitmapFactory.decodeFile(imageFile.absolutePath, options)
+
+        // options.outWidth y options.outHeight ahora tienen las dimensiones
+        if (options.outWidth > 0 && options.outHeight > 0) {
+            Pair(options.outWidth, options.outHeight)
+        } else {
+            null
+        }
+    } catch (e: Exception) {
         null
     }
 }

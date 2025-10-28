@@ -2,6 +2,8 @@ package mentat.music.com.publicarbluesky.data.bluesky.model
 
 import com.google.gson.annotations.SerializedName
 import mentat.music.com.publicarbluesky.data.bluesky.model.Facet
+// --- ¡¡NUEVA LÍNEA!! Importamos la clase que creaste ---
+import mentat.music.com.publicarbluesky.domain.model.AspectRatio
 
 /**
  * Datos de entrada para el endpoint com.atproto.repo.createRecord.
@@ -61,7 +63,12 @@ data class ImageEmbedData(
     val image: BlobObject, // Asumo que BlobObject está definido en otro lugar y es importado correctamente.
 
     @SerializedName("alt")
-    val alt: String // Texto alternativo para la imagen (IMPORTANTE para accesibilidad)
+    val alt: String, // Texto alternativo para la imagen (IMPORTANTE para accesibilidad)
+
+    // --- ¡¡NUEVO BLOQUE!! ---
+    @SerializedName("aspectRatio")
+    val aspectRatio: AspectRatio? = null
+    // --- FIN DE LO NUEVO ---
 )
 
 /**

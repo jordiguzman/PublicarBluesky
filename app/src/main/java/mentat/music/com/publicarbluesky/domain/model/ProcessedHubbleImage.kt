@@ -6,5 +6,7 @@ import java.io.File
 
 data class ProcessedHubbleImage(
     val imageFile: File,
-    val imageInfo: HubbleSiteImage // La información obtenida del scraper
+    val imageInfo: HubbleSiteImage, // La información obtenida del scraper
+    val width: Int, // <-- ¡¡LÍNEA NUEVA!!
+    val height: Int // <-- ¡¡LÍNEA NUEVA!!
 )

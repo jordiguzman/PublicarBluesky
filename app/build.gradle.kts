@@ -1,6 +1,9 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    id("org.jetbrains.kotlin.kapt")
+
+
 }
 
 android {
@@ -77,6 +80,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+
     // La dependencia de room-compiler debe ser "ksp(libs.androidx.room.compiler)" o "kapt(...)"
     // Por ahora la comento para que no de error
     // implementation(libs.androidx.room.compiler)
@@ -99,4 +103,7 @@ dependencies {
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+
+    implementation(libs.moshi.kotlin)
+    kapt(libs.moshi.codegen)
 }

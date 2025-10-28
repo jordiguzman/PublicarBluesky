@@ -9,6 +9,9 @@ import mentat.music.com.publicarbluesky.constans.Constants
 import mentat.music.com.publicarbluesky.data.hubble.model.HubbleSiteImage
 import mentat.music.com.publicarbluesky.data.hubble.remote.HubbleScraper
 import mentat.music.com.publicarbluesky.data.images.downloadImageToTempFile
+// --- ¡¡NUEVO!! Importamos la función de ImageUtils ---
+import mentat.music.com.publicarbluesky.data.images.getImageDimensions
+// --- FIN DE LO NUEVO ---
 import mentat.music.com.publicarbluesky.domain.model.ProcessedHubbleImage
 import mentat.music.com.publicarbluesky.domain.repository.PublishedImageIdRepository
 import okhttp3.OkHttpClient
@@ -118,7 +121,7 @@ class GetFreshHubbleImageUseCase(
             TAG,
             "Procediendo a descargar la imagen ID '${hubbleSiteImageToProcess!!.id}' (Título: '${hubbleSiteImageToProcess!!.cleanedTitle}')"
         )
-        var imageUrlToDownload = hubbleSiteImageToProcess!!.screenResolutionImageUrl
+        var imageUrlToDownload = hubbleSiteImageToProcess.screenResolutionImageUrl
 
         if (imageUrlToDownload.startsWith("http://")) {
             imageUrlToDownload = imageUrlToDownload.replaceFirst("http://", "https://")
@@ -157,10 +160,29 @@ class GetFreshHubbleImageUseCase(
             "Imagen ID '${hubbleSiteImageToProcess!!.id}' descargada exitosamente en: ${downloadedFile.absolutePath}"
         )
 
-        // --- Devolver el resultado exitoso ---
+        // --- ¡¡NUEVO!! Obtenemos las dimensiones del archivo descargado ---
+        Log.d(TAG, "Leyendo dimensiones del archivo: ${downloadedFile.name}")
+        val dimensions = getImageDimensions(downloadedFile)
+
+        if (dimensions == null) {
+            val errorMessage = "No se pudieron leer las dimensiones de la imagen: ${downloadedFile.absolutePath}"
+            Log.e(TAG, errorMessage)
+            return@withContext Result.failure(Exception(errorMessage))
+        }
+
+        val (width, height) = dimensions
+        Log.i(TAG, "Dimensiones obtenidas: $width x $height")
+        // --- FIN DE LO NUEVO ---
+
+        // --- Devolver el resultado exitoso (con las dimensiones) ---
         // Usamos hubbleSiteImageToProcess!! porque ya hemos verificado que no es null.
         val processedImage =
-            ProcessedHubbleImage(imageFile = downloadedFile, imageInfo = hubbleSiteImageToProcess!!)
+            ProcessedHubbleImage(
+                imageFile = downloadedFile,
+                imageInfo = hubbleSiteImageToProcess!!,
+                width = width,  // <-- Añadido
+                height = height // <-- Añadido
+            )
         Result.success(processedImage)
     }
 }
