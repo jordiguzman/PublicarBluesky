@@ -48,6 +48,8 @@ class MyApplication : Application(), Configuration.Provider {
      * Calcula cuándo es la próxima ejecución (17h o 23h) y
      * programa UNA SOLA tarea para ese momento.
      */
+    // Dentro de MyApplication.kt
+
     private fun scheduleInitialWork() {
         val workManager = WorkManager.getInstance(this)
 
@@ -63,6 +65,7 @@ class MyApplication : Application(), Configuration.Provider {
         val initialWorkRequest = OneTimeWorkRequest.Builder(HubblePostWorker::class.java)
             .setConstraints(constraints)
             .setInitialDelay(delay, TimeUnit.MILLISECONDS) // Pone el retraso calculado
+            .addTag("automatic_chain") // <-- ¡¡ESTA ES LA LÍNEA NUEVA!!
             .build()
 
         // 4. Encolar el trabajo

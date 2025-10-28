@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat // <-- Importante para el permiso
 import androidx.lifecycle.lifecycleScope
 import androidx.work.Constraints // <-- Importante para el botón
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType // <-- Importante para el botón
 import androidx.work.OneTimeWorkRequest // <-- Importante para el botón
 import androidx.work.WorkManager // <-- Importante para el botón
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
                         callPostTextToBlueskyUseCase(text = textToPost)
                     },
 
+
                     // --- ¡¡ESTA ES LA LÓGICA NUEVA DEL BOTÓN!! ---
                     onFetchAndProcessHubbleImageClick = {
                         Log.d("MainActivity", "Botón de publicación manual presionado.")
@@ -75,12 +77,21 @@ class MainActivity : ComponentActivity() {
                         // 2. Crear una petición de UNA SOLA VEZ
                         val manualWorkRequest = OneTimeWorkRequest.Builder(HubblePostWorker::class.java)
                             .setConstraints(constraints)
+                            .addTag("manual_job") // <-- ¡¡ESTA ES LA LÍNEA NUEVA!!
                             .build()
 
-                        // 3. ¡Encolar la tarea para que se ejecute AHORA!
-                        WorkManager.getInstance(this@MainActivity).enqueue(manualWorkRequest)
+                        // 3. ¡Encolar la tarea AHORA!
+                        // Usamos un nombre único y 'REPLACE'
+                        // para que si pulsas 5 veces, cancele las 4 anteriores
+                        // y solo se ejecute la última.
+                        WorkManager.getInstance(this@MainActivity).enqueueUniqueWork(
+                            "manual-post-job", // <-- ¡¡ESTO ES NUEVO!! (nombre único)
+                            ExistingWorkPolicy.REPLACE, // <-- ¡¡ESTO ES NUEVO!! (REPLACE)
+                            manualWorkRequest
+                        )
                     }
                     // --- FIN DE LA LÓGICA NUEVA ---
+
                 )
             }
         }

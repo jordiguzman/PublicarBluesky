@@ -19,6 +19,7 @@ import mentat.music.com.publicarbluesky.data.bluesky.utils.createTagFacets
 import java.util.Calendar // <-- Importante para las horas
 import java.util.concurrent.TimeUnit // <-- Importante para el delay
 import androidx.work.Constraints // <-- Importante para re-programar
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest // <-- Importante para re-programar
 import androidx.work.WorkManager // <-- Importante para re-programar
@@ -37,9 +38,12 @@ class HubblePostWorker(
         const val NOTIFICATION_CHANNEL_ID = "hubble_post_channel"
     }
 
+    // Dentro de HubblePostWorker.kt
+
     @RequiresApi(Build.VERSION_CODES.O)
     override suspend fun doWork(): Result {
-        Log.i(TAG, "Worker iniciado. Comenzando proceso de publicación automática.")
+        // --- ¡¡LÍNEA MODIFICADA!! ---
+        Log.i(TAG, "Worker iniciado. Tags: $tags") // Log para saber qué tipo de worker es
 
         var runResult: Result // Variable para guardar el resultado de esta ejecución
 
@@ -103,11 +107,15 @@ class HubblePostWorker(
             runResult = Result.failure()
         }
 
-        // --- 5. ¡¡IMPORTANTE!! RE-PROGRAMAR LA SIGUIENTE TAREA ---
-        // Esto se ejecuta AHORA tanto si runResult es success() como failure().
-        // Así nos aseguramos de que la cadena NUNCA se rompa.
-        Log.d(TAG, "Programando la siguiente tarea...")
-        scheduleNextWork()
+        // --- 5. ¡¡BLOQUE MODIFICADO!! RE-PROGRAMAR SÓLO SI ES AUTOMÁTICO ---
+        // Comprobamos la etiqueta para ver si debemos re-programar.
+        if (tags.contains("automatic_chain")) {
+            Log.d(TAG, "Es 'automatic_chain'. Programando la siguiente tarea...")
+            scheduleNextWork()
+        } else {
+            // Si es un "manual_job", simplemente termina.
+            Log.d(TAG, "Es 'manual_job'. No se re-programa la cadena.")
+        }
 
         // Devolvemos el resultado de ESTA ejecución
         return runResult
@@ -161,6 +169,8 @@ class HubblePostWorker(
      * Calcula cuál es la próxima hora (17 o 23) y programa
      * una nueva tarea (OneTimeWorkRequest) para ese momento.
      */
+    // Dentro de HubblePostWorker.kt (esta es la función que va al final)
+
     private fun scheduleNextWork() {
         val calendar = Calendar.getInstance()
         val currentHour = calendar.get(Calendar.HOUR_OF_DAY)
@@ -184,11 +194,18 @@ class HubblePostWorker(
         val nextWorkRequest = OneTimeWorkRequest.Builder(HubblePostWorker::class.java)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setInitialDelay(delay, TimeUnit.MILLISECONDS)
+            .addTag("automatic_chain") // <-- ¡¡ESTA ES LA LÍNEA NUEVA!!
             .build()
 
-        // Encolar la próxima tarea en la cadena
-        WorkManager.getInstance(appContext).enqueue(nextWorkRequest)
-        Log.i(TAG, "Próxima tarea programada en $delay ms.")
+        // --- ¡¡BLOQUE MODIFICADO!! ---
+        // Encolar la próxima tarea REEMPLAZANDO la anterior en la cadena ÚNICA
+        WorkManager.getInstance(appContext).enqueueUniqueWork(
+            "hubble-post-chain", // El MISMO nombre único que en MyApplication
+            ExistingWorkPolicy.REPLACE, // REEMPLAZAR la anterior
+            nextWorkRequest
+        )
+        // (He modificado el log para que sea más claro)
+        Log.i(TAG, "Próxima tarea (única) programada en $delay ms.")
     }
 
     /**
